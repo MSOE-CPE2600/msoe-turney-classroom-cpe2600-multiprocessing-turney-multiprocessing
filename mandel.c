@@ -4,12 +4,18 @@
 //  https://users.cs.fiu.edu/~cpoellab/teaching/cop4610_fall22/project3.html
 //
 //  Converted to use jpg instead of BMP and other minor changes
-//  
+//  Modified by Zane Rothe
 ///
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
 #include "jpegrw.h"
+#include <fcntl.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
+#include <semaphore.h>
+#include <math.h>
 
 // local routines
 static int iteration_to_color( int i, int max );
@@ -21,6 +27,16 @@ static void show_help();
 
 int main( int argc, char *argv[] )
 {
+///////////////////////////////////////////////////////////////////////////////
+// Added semaphore usage
+ 	sem_t *sem;
+    sem = sem_open("/mysem", O_CREAT, 0666, 0); //link to named semaphore
+    if (sem == SEM_FAILED)
+    {
+        perror("sem_open");
+        return 1;
+    }
+///////////////////////////////////////////////////////////////////////////////
 	char c;
 
 	// These are the default configuration values used
@@ -72,7 +88,7 @@ int main( int argc, char *argv[] )
 	yscale = xscale / image_width * image_height;
 
 	// Display the configuration of the image.
-	printf("mandel: x=%lf y=%lf xscale=%lf yscale=%1f max=%d outfile=%s\n",xcenter,ycenter,xscale,yscale,max,outfile);
+	//printf("mandel: x=%lf y=%lf xscale=%lf yscale=%1f max=%d outfile=%s\n",xcenter,ycenter,xscale,yscale,max,outfile);
 
 	// Create a raw image of the appropriate size.
 	imgRawImage* img = initRawImage(image_width,image_height);
@@ -89,6 +105,14 @@ int main( int argc, char *argv[] )
 	// free the mallocs
 	freeRawImage(img);
 
+
+   
+///////////////////////////////////////////////////////////////////////////////
+// Added semaphore usage
+    printf("writing  %s\n",outfile);
+    sem_post(sem);
+    sem_close(sem);
+///////////////////////////////////////////////////////////////////////////////
 	return 0;
 }
 
@@ -160,7 +184,7 @@ Modify this function to make more interesting colors.
 */
 int iteration_to_color( int iters, int max )
 {
-	int color = 0xFFFFFF*iters/(double)max;
+	int color = 0xFFFFFF*(1-pow((iters/(double)max),0.5)); //changed color mapping
 	return color;
 }
 
