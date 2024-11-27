@@ -1,5 +1,6 @@
 /// 
 //  mandel.c
+//  Name: Alion Bujku
 //  Based on example code found here:
 //  https://users.cs.fiu.edu/~cpoellab/teaching/cop4610_fall22/project3.html
 //
