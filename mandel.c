@@ -6,180 +6,206 @@
 //  Converted to use jpg instead of BMP and other minor changes
 //  
 ///
+
 #include <stdlib.h>
+#include <string.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <sys/wait.h>
+#include <semaphore.h>
+#include <fcntl.h>
+#include <math.h>
 #include "jpegrw.h"
 
-// local routines
-static int iteration_to_color( int i, int max );
-static int iterations_at_point( double x, double y, int max );
-static void compute_image( imgRawImage *img, double xmin, double xmax,
-									double ymin, double ymax, int max );
-static void show_help();
+// Function prototypes
+int iterations_at_point(double x, double y, int max);   // Calculate iterations for a given point
+int iteration_to_color(int i, int max);                // Map iteration count to color
+void compute_image(imgRawImage *img, double xmin, double xmax, double ymin, double ymax, int max); // Compute Mandelbrot fractal
+void show_help();                                      // Display help message
+void generate_movie(double xcenter, double ycenter, double xscale, int image_width, 
+                    int image_height, int max, int num_frames, int num_children); // Generate a Mandelbrot zooming movie
 
+int main(int argc, char *argv[]) {
+    const char *outfile = "mandel.jpg"; // Default output file for single image
+    double xcenter = -0.5, ycenter = 0; // Default center coordinates of the fractal
+    double xscale = 4, yscale = 0;     // Default scale and aspect ratio
+    int image_width = 1000, image_height = 1000, max = 1000; // Default resolution and max iterations
 
-int main( int argc, char *argv[] )
-{
-	char c;
+    // Check if "--movie" mode is enabled
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--movie") == 0) {
+            int num_frames = 50, num_children = 4; // Default number of frames and processes
+            char c;
 
-	// These are the default configuration values used
-	// if no command line arguments are given.
-	const char *outfile = "mandel.jpg";
-	double xcenter = 0;
-	double ycenter = 0;
-	double xscale = 4;
-	double yscale = 0; // calc later
-	int    image_width = 1000;
-	int    image_height = 1000;
-	int    max = 1000;
+            // Parse movie-specific options
+            while ((c = getopt(argc, argv, "x:y:s:W:H:m:f:p:h")) != -1) {
+                switch (c) {
+                    case 'x': xcenter = atof(optarg); break;      // Set X center
+                    case 'y': ycenter = atof(optarg); break;      // Set Y center
+                    case 's': xscale = atof(optarg); break;       // Set scale
+                    case 'W': image_width = atoi(optarg); break;  // Set image width
+                    case 'H': image_height = atoi(optarg); break; // Set image height
+                    case 'm': max = atoi(optarg); break;          // Set max iterations
+                    case 'f': num_frames = atoi(optarg); break;   // Set number of frames
+                    case 'p': num_children = atoi(optarg); break; // Set number of processes
+                    case 'h': show_help(); return 0;              // Display help and exit
+                }
+            }
+            generate_movie(xcenter, ycenter, xscale, image_width, image_height, max, num_frames, num_children);
+            return 0; // Exit after generating the movie
+        }
+    }
 
-	// For each command line argument given,
-	// override the appropriate configuration value.
+    // Parse single-image options
+    char c;
+    while ((c = getopt(argc, argv, "x:y:s:W:H:m:o:h")) != -1) {
+        switch (c) {
+            case 'x': xcenter = atof(optarg); break;      // Set X center
+            case 'y': ycenter = atof(optarg); break;      // Set Y center
+            case 's': xscale = atof(optarg); break;       // Set scale
+            case 'W': image_width = atoi(optarg); break;  // Set image width
+            case 'H': image_height = atoi(optarg); break; // Set image height
+            case 'm': max = atoi(optarg); break;          // Set max iterations
+            case 'o': outfile = optarg; break;            // Set output file
+            case 'h': show_help(); return 0;              // Display help and exit
+        }
+    }
 
-	while((c = getopt(argc,argv,"x:y:s:W:H:m:o:h"))!=-1) {
-		switch(c) 
-		{
-			case 'x':
-				xcenter = atof(optarg);
-				break;
-			case 'y':
-				ycenter = atof(optarg);
-				break;
-			case 's':
-				xscale = atof(optarg);
-				break;
-			case 'W':
-				image_width = atoi(optarg);
-				break;
-			case 'H':
-				image_height = atoi(optarg);
-				break;
-			case 'm':
-				max = atoi(optarg);
-				break;
-			case 'o':
-				outfile = optarg;
-				break;
-			case 'h':
-				show_help();
-				exit(1);
-				break;
-		}
-	}
+    // Compute the aspect ratio
+    yscale = xscale / image_width * image_height;
 
-	// Calculate y scale based on x scale (settable) and image sizes in X and Y (settable)
-	yscale = xscale / image_width * image_height;
+    // Print the rendering parameters
+    printf("Rendering Mandelbrot image with parameters:\n");
+    printf("Center: (%lf, %lf), Scale: %lf, Resolution: %dx%d, Max Iterations: %d\n", 
+           xcenter, ycenter, xscale, image_width, image_height, max);
 
-	// Display the configuration of the image.
-	printf("mandel: x=%lf y=%lf xscale=%lf yscale=%1f max=%d outfile=%s\n",xcenter,ycenter,xscale,yscale,max,outfile);
+    // Initialize the image
+    imgRawImage *img = initRawImage(image_width, image_height);
 
-	// Create a raw image of the appropriate size.
-	imgRawImage* img = initRawImage(image_width,image_height);
+    // Compute the Mandelbrot fractal
+    compute_image(img, xcenter - xscale / 2, xcenter + xscale / 2, 
+                  ycenter - yscale / 2, ycenter + yscale / 2, max);
 
-	// Fill it with a black
-	setImageCOLOR(img,0);
+    // Save the fractal to a file
+    storeJpegImageFile(img, outfile);
 
-	// Compute the Mandelbrot image
-	compute_image(img,xcenter-xscale/2,xcenter+xscale/2,ycenter-yscale/2,ycenter+yscale/2,max);
+    // Free allocated memory
+    freeRawImage(img);
+    printf("Image saved to %s\n", outfile);
 
-	// Save the image in the stated file.
-	storeJpegImageFile(img,outfile);
-
-	// free the mallocs
-	freeRawImage(img);
-
-	return 0;
+    return 0;
 }
 
+// Generate a zooming Mandelbrot movie
+void generate_movie(double xcenter, double ycenter, double xscale, int image_width, 
+                    int image_height, int max, int num_frames, int num_children) {
+    // Remove any existing semaphore with the same name
+    sem_unlink("/mandel_sem");
 
+    // Create a new semaphore
+    sem_t *sem = sem_open("/mandel_sem", O_CREAT | O_EXCL, 0644, num_children);
+    if (sem == SEM_FAILED) {
+        perror("sem_open failed");
+        exit(1);
+    }
 
+    double zoom_factor = 0.90; // Zoom factor for each frame
 
-/*
-Return the number of iterations at point x, y
-in the Mandelbrot space, up to a maximum of max.
-*/
+    // Generate each frame
+    for (int frame = 0; frame < num_frames; frame++) {
+        sem_wait(sem); // Wait for a free slot
 
-int iterations_at_point( double x, double y, int max )
-{
-	double x0 = x;
-	double y0 = y;
+        // Fork a new child process
+        if (fork() == 0) {
+            char filename[256];
+            snprintf(filename, sizeof(filename), "frame%02d.jpg", frame);
 
-	int iter = 0;
+            // Calculate the bounds for the current frame
+            double scale = xscale * pow(zoom_factor, frame);
+            double xmin = xcenter - scale / 2;
+            double xmax = xcenter + scale / 2;
+            double ymin = ycenter - scale / 2;
+            double ymax = ycenter + scale / 2;
 
-	while( (x*x + y*y <= 4) && iter < max ) {
+            // Debugging: Log frame details
+            printf("Frame %d: xmin=%f, xmax=%f, ymin=%f, ymax=%f, scale=%f\n", 
+                   frame, xmin, xmax, ymin, ymax, scale);
 
-		double xt = x*x - y*y + x0;
-		double yt = 2*x*y + y0;
+            // Generate the fractal image for the frame
+            imgRawImage *img = initRawImage(image_width, image_height);
+            compute_image(img, xmin, xmax, ymin, ymax, max);
+            if (storeJpegImageFile(img, filename) != 0) {
+                fprintf(stderr, "Failed to save frame: %s\n", filename);
+            }
+            freeRawImage(img);
 
-		x = xt;
-		y = yt;
+            // Release the semaphore slot and exit child process
+            sem_post(sem);
+            exit(0);
+        }
+    }
 
-		iter++;
-	}
+    // Wait for all child processes to finish
+    while (wait(NULL) > 0);
 
-	return iter;
+    // Cleanup the semaphore
+    sem_close(sem);
+    sem_unlink("/mandel_sem");
+
+    // Create a movie from the frames
+    printf("All frames generated! Creating movie...\n");
+    system("ffmpeg -y -framerate 24 -i frame%02d.jpg mandelmovie.mp4");
+    printf("Movie created: mandelmovie.mp4\n");
 }
 
-/*
-Compute an entire Mandelbrot image, writing each point to the given bitmap.
-Scale the image to the range (xmin-xmax,ymin-ymax), limiting iterations to "max"
-*/
+// Compute the Mandelbrot fractal
+void compute_image(imgRawImage *img, double xmin, double xmax, double ymin, double ymax, int max) {
+    int width = img->width;
+    int height = img->height;
 
-void compute_image(imgRawImage* img, double xmin, double xmax, double ymin, double ymax, int max )
-{
-	int i,j;
-
-	int width = img->width;
-	int height = img->height;
-
-	// For every pixel in the image...
-
-	for(j=0;j<height;j++) {
-
-		for(i=0;i<width;i++) {
-
-			// Determine the point in x,y space for that pixel.
-			double x = xmin + i*(xmax-xmin)/width;
-			double y = ymin + j*(ymax-ymin)/height;
-
-			// Compute the iterations at that point.
-			int iters = iterations_at_point(x,y,max);
-
-			// Set the pixel in the bitmap.
-			setPixelCOLOR(img,i,j,iteration_to_color(iters,max));
-		}
-	}
+    // Iterate through each pixel in the image
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            double cx = xmin + x * (xmax - xmin) / (width - 1);
+            double cy = ymin + y * (ymax - ymin) / (height - 1);
+            int iterations = iterations_at_point(cx, cy, max); // Calculate iterations
+            int color = iteration_to_color(iterations, max);  // Map iterations to color
+            setPixelCOLOR(img, x, y, color);                 // Set pixel color
+        }
+    }
 }
 
-
-/*
-Convert a iteration number to a color.
-Here, we just scale to gray with a maximum of imax.
-Modify this function to make more interesting colors.
-*/
-int iteration_to_color( int iters, int max )
-{
-	int color = 0xFFFFFF*iters/(double)max;
-	return color;
+// Calculate the number of iterations at a given point
+int iterations_at_point(double x, double y, int max) {
+    int count = 0;
+    double zx = 0.0, zy = 0.0;
+    while (zx * zx + zy * zy < 4.0 && count < max) {
+        double temp = zx * zx - zy * zy + x;
+        zy = 2.0 * zx * zy + y;
+        zx = temp;
+        count++;
+    }
+    return count;
 }
 
+// Map the iteration count to a color
+int iteration_to_color(int i, int max) {
+    if (i == max) return 0x000000; // Black for points inside the Mandelbrot set
+    int r = (i * 9) % 256; // Red gradient
+    int g = (i * 15) % 256; // Green gradient
+    int b = (i * 25) % 256; // Blue gradient
+    return (r << 16) | (g << 8) | b; // Combine RGB
+}
 
-// Show help message
-void show_help()
-{
-	printf("Use: mandel [options]\n");
-	printf("Where options are:\n");
-	printf("-m <max>    The maximum number of iterations per point. (default=1000)\n");
-	printf("-x <coord>  X coordinate of image center point. (default=0)\n");
-	printf("-y <coord>  Y coordinate of image center point. (default=0)\n");
-	printf("-s <scale>  Scale of the image in Mandlebrot coordinates (X-axis). (default=4)\n");
-	printf("-W <pixels> Width of the image in pixels. (default=1000)\n");
-	printf("-H <pixels> Height of the image in pixels. (default=1000)\n");
-	printf("-o <file>   Set output file. (default=mandel.bmp)\n");
-	printf("-h          Show this help text.\n");
-	printf("\nSome examples are:\n");
-	printf("mandel -x -0.5 -y -0.5 -s 0.2\n");
-	printf("mandel -x -.38 -y -.665 -s .05 -m 100\n");
-	printf("mandel -x 0.286932 -y 0.014287 -s .0005 -m 1000\n\n");
+// Display help message
+void show_help() {
+    printf("Usage: mandel [options]\n");
+    printf("Options:\n");
+    printf("  -x <double>   X center (default=-0.5)\n");
+    printf("  -y <double>   Y center (default=0.0)\n");
+    printf("  -s <double>   Scale (default=4.0)\n");
+    printf("  -W <int>      Image width (default=1000)\n");
+    printf("  -H <int>      Image height (default=1000)\n");
+    printf("  -m <int>      Max iterations (default=1000)\n");
+    printf("  --movie       Generate a movie instead of an image\n");
 }
