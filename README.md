@@ -1,4 +1,9 @@
 # System Programming Lab 11 Multiprocessing
+
+- **Name:** Alion Bujku
+- **Assignment:** System Programming Lab 11 Multiprocessing
+- **Section Number:** 111
+- **Date:** 11/25/2024
 ## Overview
 The Mandelbrot movie generator creates a zooming sequence of the Mandelbrot fractal, 
 using child processes to divide the computational workload. The program utilizes
