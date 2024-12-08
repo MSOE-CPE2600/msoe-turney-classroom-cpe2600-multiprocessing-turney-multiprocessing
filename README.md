@@ -4,6 +4,7 @@
 - **Assignment:** System Programming Lab 11 Multiprocessing
 - **Section Number:** 111
 - **Date:** 11/25/2024
+
 ## Overview
 The Mandelbrot movie generator creates a zooming sequence of the Mandelbrot fractal, 
 using child processes to divide the computational workload. The program utilizes
@@ -89,3 +90,61 @@ make
 ./mandel --movie -x 0.4 -y 0.3 -m 1500 -W 1500 -H 1500 -f 50 -p 21
 ```
 
+# System Programming Lab 12 Multithreading
+
+- **Name:** Alion Bujku
+- **Assignment:** System Programming Lab 12 Multithreading
+- **Section Number:** 111
+- **Date:** 12/06/2024
+
+## Overview
+This project builds onto the Mandelbrot generator from lab 11 by adding support for 
+multithreading alongside multiprocessing. The program uses both techniques to further
+improve the runtime performance for generating images or movies of the Mandelbrot set.
+
+## Implemenation of Multithreading
+Multithreading was implemented using the `pthread` libaray. The program :
+1. Accepts the number of threads as a command-line argument (-t)
+2. Divides the image into equal regions (rows) based on the number of threads
+3. Each thread computes the Mandelbrot set for its assigned region
+4. The main thread waits for all threads to complete before combining the results and
+saving the image
+
+The core of this implementation is in the `compute_image_multithreaded()` function, which
+creates threads using `pthread_create` and joins them using `pthread_join` 
+
+## Runtime Table
+The table below shows the runtime (in seconds) for generating 50 images using different
+combinations of threads and processes
+
+![Runtime vs Processes](RunTimesProcessVsThread.png)
+
+## Discussion
+### i. Which technique seemed to impact runtime more – multithreading or multiprocessing. Why do you think that is?
+* Multiprocessing had a more significant impact on runtime reduction compared to 
+multithreading. This is because each process runs in its own memory space which allows
+for better CPU core utilization. Threads on the other hand tend to share memory within
+the same process.
+
+### ii. Was there a “sweet spot” where optimal (minimal) runtime was achieved?
+* The optimal runtime was achieved with 24 processes and 24 threads which was 7.573 seconds. This was set to an AMD Ryzen 9 7900X configuration.
+
+## Program Instructions
+
+1. Compile the Code
+```
+make
+```
+
+2. Run the Program
+    * Single Image Mode: 
+```
+./mandel -o output.jpg -p <num_processes> -t <num_threads>
+```
+    * Movie Mode:
+```
+./mandel --movie -p <num_processes> -t <num_threads>
+```
+
+
+ 

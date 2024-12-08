@@ -1,110 +1,121 @@
-/// 
+//
 //  mandel.c
 //  Name: Alion Bujku
-//  Based on example code found here:
-//  https://users.cs.fiu.edu/~cpoellab/teaching/cop4610_fall22/project3.html
+//  Enhanced to support multiprocessing (-p) and multithreading (-t) simultaneously.
 //
-//  Converted to use jpg instead of BMP and other minor changes
-//  
-///
 
+// Standard library headers for general operations
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/wait.h>
-#include <semaphore.h>
-#include <fcntl.h>
-#include <math.h>
-#include "jpegrw.h"
+#include <pthread.h> // For multithreading
+#include <semaphore.h> // For inter-process synchronization
+#include <fcntl.h> // For file control options
+#include <math.h> // For mathematical functions
+#include <getopt.h> // For parsing command-line options
+#include "jpegrw.h" // Custom library for handling JPEG files
+
+// Struct to encapsulate data passed to threads
+typedef struct {
+    imgRawImage *img; // Pointer to the image being generated
+    double xmin, xmax, ymin, ymax; // Coordinates for the Mandelbrot calculation
+    int max; // Maximum number of iterations
+    int y_start, y_end; // Range of rows to compute
+} ThreadData;
 
 // Function prototypes
-int iterations_at_point(double x, double y, int max);   // Calculate iterations for a given point
-int iteration_to_color(int i, int max);                // Map iteration count to color
-void compute_image(imgRawImage *img, double xmin, double xmax, double ymin, double ymax, int max); // Compute Mandelbrot fractal
-void show_help();                                      // Display help message
-void generate_movie(double xcenter, double ycenter, double xscale, int image_width, 
-                    int image_height, int max, int num_frames, int num_children); // Generate a Mandelbrot zooming movie
+int iterations_at_point(double x, double y, int max); // Calculate iterations for a point
+int iteration_to_color(int i, int max); // Map iteration count to a color
+void compute_image_multithreaded(imgRawImage *img, double xmin, double xmax, double ymin, double ymax, int max, int num_threads);
+void *thread_compute(void *args); // Worker thread function for Mandelbrot computation
+void generate_movie(double xcenter, double ycenter, double xscale, int image_width, int image_height, int max, int num_frames, int num_processes, int num_threads);
+void show_help(); // Display help message
 
 int main(int argc, char *argv[]) {
-    const char *outfile = "mandel.jpg"; // Default output file for single image
-    double xcenter = -0.5, ycenter = 0; // Default center coordinates of the fractal
-    double xscale = 4, yscale = 0;     // Default scale and aspect ratio
-    int image_width = 1000, image_height = 1000, max = 1000; // Default resolution and max iterations
+    // Default parameters for Mandelbrot image generation
+    double xcenter = -0.5, ycenter = 0.0; // Default center of the fractal
+    double xscale = 4.0, yscale = 0.0; // Scale of the fractal (yscale computed later)
+    int image_width = 1000, image_height = 1000; // Image resolution
+    int max = 1000; // Maximum iterations for Mandelbrot calculation
+    int num_threads = 1, num_processes = 1, num_frames = 50; // Defaults for parallelism and movie frames
+    int is_movie_mode = 0; // Flag to indicate movie generation mode
+    const char *outfile = NULL; // Output file name for single image mode
 
-    // Check if "--movie" mode is enabled
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--movie") == 0) {
-            int num_frames = 50, num_children = 4; // Default number of frames and processes
-            char c;
+    // Command-line options definition
+    struct option long_options[] = {
+        {"movie", no_argument, &is_movie_mode, 1}, // Enable movie mode
+        {"x", required_argument, 0, 'x'}, // X center coordinate
+        {"y", required_argument, 0, 'y'}, // Y center coordinate
+        {"scale", required_argument, 0, 's'}, // Fractal scale
+        {"width", required_argument, 0, 'W'}, // Image width
+        {"height", required_argument, 0, 'H'}, // Image height
+        {"max", required_argument, 0, 'm'}, // Max iterations
+        {"frames", required_argument, 0, 'f'}, // Number of frames for movie
+        {"processes", required_argument, 0, 'p'}, // Number of processes
+        {"threads", required_argument, 0, 't'}, // Number of threads
+        {"output", required_argument, 0, 'o'}, // Output file name
+        {"help", no_argument, 0, 'h'}, // Show help
+        {0, 0, 0, 0} // End of options
+    };
 
-            // Parse movie-specific options
-            while ((c = getopt(argc, argv, "x:y:s:W:H:m:f:p:h")) != -1) {
-                switch (c) {
-                    case 'x': xcenter = atof(optarg); break;      // Set X center
-                    case 'y': ycenter = atof(optarg); break;      // Set Y center
-                    case 's': xscale = atof(optarg); break;       // Set scale
-                    case 'W': image_width = atoi(optarg); break;  // Set image width
-                    case 'H': image_height = atoi(optarg); break; // Set image height
-                    case 'm': max = atoi(optarg); break;          // Set max iterations
-                    case 'f': num_frames = atoi(optarg); break;   // Set number of frames
-                    case 'p': num_children = atoi(optarg); break; // Set number of processes
-                    case 'h': show_help(); return 0;              // Display help and exit
-                }
-            }
-            generate_movie(xcenter, ycenter, xscale, image_width, image_height, max, num_frames, num_children);
-            return 0; // Exit after generating the movie
-        }
-    }
-
-    // Parse single-image options
-    char c;
-    while ((c = getopt(argc, argv, "x:y:s:W:H:m:o:h")) != -1) {
-        switch (c) {
-            case 'x': xcenter = atof(optarg); break;      // Set X center
-            case 'y': ycenter = atof(optarg); break;      // Set Y center
-            case 's': xscale = atof(optarg); break;       // Set scale
-            case 'W': image_width = atoi(optarg); break;  // Set image width
+    // Parse command-line arguments
+    int opt, option_index = 0;
+    while ((opt = getopt_long(argc, argv, "x:y:s:W:H:m:o:f:p:t:h", long_options, &option_index)) != -1) {
+        switch (opt) {
+            case 'x': xcenter = atof(optarg); break; // Set X center
+            case 'y': ycenter = atof(optarg); break; // Set Y center
+            case 's': xscale = atof(optarg); break; // Set scale
+            case 'W': image_width = atoi(optarg); break; // Set image width
             case 'H': image_height = atoi(optarg); break; // Set image height
-            case 'm': max = atoi(optarg); break;          // Set max iterations
-            case 'o': outfile = optarg; break;            // Set output file
-            case 'h': show_help(); return 0;              // Display help and exit
+            case 'm': max = atoi(optarg); break; // Set max iterations
+            case 'o': outfile = optarg; break; // Set output file name
+            case 'f': num_frames = atoi(optarg); break; // Set number of movie frames
+            case 'p': num_processes = atoi(optarg); break; // Set number of processes
+            case 't': num_threads = atoi(optarg); break; // Set number of threads
+            case 'h': show_help(); return 0; // Show help message
+            default: show_help(); return 1; // Invalid input
         }
     }
 
-    // Compute the aspect ratio
+    // Compute yscale to match aspect ratio
     yscale = xscale / image_width * image_height;
 
-    // Print the rendering parameters
-    printf("Rendering Mandelbrot image with parameters:\n");
-    printf("Center: (%lf, %lf), Scale: %lf, Resolution: %dx%d, Max Iterations: %d\n", 
-           xcenter, ycenter, xscale, image_width, image_height, max);
+    // Handle movie generation mode
+    if (is_movie_mode) {
+        generate_movie(xcenter, ycenter, xscale, image_width, image_height, max, num_frames, num_processes, num_threads);
+        return 0;
+    }
 
-    // Initialize the image
+    // Validate single image mode (output file is mandatory)
+    if (outfile == NULL) {
+        fprintf(stderr, "Error: Output file (-o) must be specified for single image mode.\n");
+        return 1;
+    }
+
+    // Initialize image structure
     imgRawImage *img = initRawImage(image_width, image_height);
 
-    // Compute the Mandelbrot fractal
-    compute_image(img, xcenter - xscale / 2, xcenter + xscale / 2, 
-                  ycenter - yscale / 2, ycenter + yscale / 2, max);
+    // Compute Mandelbrot set using multithreading
+    compute_image_multithreaded(img, xcenter - xscale / 2, xcenter + xscale / 2,
+                                ycenter - yscale / 2, ycenter + yscale / 2, max, num_threads);
 
-    // Save the fractal to a file
-    storeJpegImageFile(img, outfile);
+    // Save the final image
+    if (storeJpegImageFile(img, outfile) != 0) {
+        fprintf(stderr, "Error: Failed to save image to %s\n", outfile);
+    }
 
-    // Free allocated memory
+    // Free allocated resources
     freeRawImage(img);
-    printf("Image saved to %s\n", outfile);
 
     return 0;
 }
 
-// Generate a zooming Mandelbrot movie
-void generate_movie(double xcenter, double ycenter, double xscale, int image_width, 
-                    int image_height, int max, int num_frames, int num_children) {
-    // Remove any existing semaphore with the same name
-    sem_unlink("/mandel_sem");
-
-    // Create a new semaphore
-    sem_t *sem = sem_open("/mandel_sem", O_CREAT | O_EXCL, 0644, num_children);
+// Generate a Mandelbrot movie using multiprocessing and multithreading
+void generate_movie(double xcenter, double ycenter, double xscale, int image_width, int image_height, int max, int num_frames, int num_processes, int num_threads) {
+    sem_unlink("/mandel_sem"); // Unlink existing semaphore
+    sem_t *sem = sem_open("/mandel_sem", O_CREAT | O_EXCL, 0644, num_processes); // Initialize semaphore
     if (sem == SEM_FAILED) {
         perror("sem_open failed");
         exit(1);
@@ -112,71 +123,78 @@ void generate_movie(double xcenter, double ycenter, double xscale, int image_wid
 
     double zoom_factor = 0.90; // Zoom factor for each frame
 
-    // Generate each frame
     for (int frame = 0; frame < num_frames; frame++) {
-        sem_wait(sem); // Wait for a free slot
+        sem_wait(sem); // Wait for available process slot
 
-        // Fork a new child process
-        if (fork() == 0) {
+        if (fork() == 0) { // Child process
             char filename[256];
-            snprintf(filename, sizeof(filename), "frame%02d.jpg", frame);
+            snprintf(filename, sizeof(filename), "frame%03d.jpg", frame);
 
-            // Calculate the bounds for the current frame
             double scale = xscale * pow(zoom_factor, frame);
             double xmin = xcenter - scale / 2;
             double xmax = xcenter + scale / 2;
             double ymin = ycenter - scale / 2;
             double ymax = ycenter + scale / 2;
 
-            // Debugging: Log frame details
-            printf("Frame %d: xmin=%f, xmax=%f, ymin=%f, ymax=%f, scale=%f\n", 
-                   frame, xmin, xmax, ymin, ymax, scale);
-
-            // Generate the fractal image for the frame
             imgRawImage *img = initRawImage(image_width, image_height);
-            compute_image(img, xmin, xmax, ymin, ymax, max);
-            if (storeJpegImageFile(img, filename) != 0) {
-                fprintf(stderr, "Failed to save frame: %s\n", filename);
-            }
+            compute_image_multithreaded(img, xmin, xmax, ymin, ymax, max, num_threads);
+            storeJpegImageFile(img, filename);
             freeRawImage(img);
 
-            // Release the semaphore slot and exit child process
-            sem_post(sem);
-            exit(0);
+            sem_post(sem); // Signal semaphore
+            exit(0); // End child process
         }
     }
 
-    // Wait for all child processes to finish
-    while (wait(NULL) > 0);
+    while (wait(NULL) > 0); // Wait for all child processes
 
-    // Cleanup the semaphore
-    sem_close(sem);
-    sem_unlink("/mandel_sem");
-
-    // Create a movie from the frames
-    printf("All frames generated! Creating movie...\n");
-    system("ffmpeg -y -framerate 24 -i frame%02d.jpg mandelmovie.mp4");
-    printf("Movie created: mandelmovie.mp4\n");
+    sem_close(sem); // Close semaphore
+    sem_unlink("/mandel_sem"); // Unlink semaphore
 }
 
-// Compute the Mandelbrot fractal
-void compute_image(imgRawImage *img, double xmin, double xmax, double ymin, double ymax, int max) {
-    int width = img->width;
-    int height = img->height;
+// Mandelbrot computation using multithreading
+void compute_image_multithreaded(imgRawImage *img, double xmin, double xmax, double ymin, double ymax, int max, int num_threads) {
+    pthread_t threads[num_threads];
+    ThreadData thread_data[num_threads];
+    int rows_per_thread = img->height / num_threads;
 
-    // Iterate through each pixel in the image
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            double cx = xmin + x * (xmax - xmin) / (width - 1);
-            double cy = ymin + y * (ymax - ymin) / (height - 1);
-            int iterations = iterations_at_point(cx, cy, max); // Calculate iterations
-            int color = iteration_to_color(iterations, max);  // Map iterations to color
-            setPixelCOLOR(img, x, y, color);                 // Set pixel color
-        }
+    for (int i = 0; i < num_threads; i++) {
+        thread_data[i] = (ThreadData){
+            .img = img,
+            .xmin = xmin,
+            .xmax = xmax,
+            .ymin = ymin,
+            .ymax = ymax,
+            .max = max,
+            .y_start = i * rows_per_thread,
+            .y_end = (i == num_threads - 1) ? img->height : (i + 1) * rows_per_thread
+        };
+        pthread_create(&threads[i], NULL, thread_compute, &thread_data[i]);
+    }
+
+    for (int i = 0; i < num_threads; i++) {
+        pthread_join(threads[i], NULL);
     }
 }
 
-// Calculate the number of iterations at a given point
+// Worker thread function for Mandelbrot computation
+void *thread_compute(void *args) {
+    ThreadData *data = (ThreadData *)args;
+
+    for (int y = data->y_start; y < data->y_end; y++) {
+        for (int x = 0; x < data->img->width; x++) {
+            double cx = data->xmin + x * (data->xmax - data->xmin) / (data->img->width - 1);
+            double cy = data->ymin + y * (data->ymax - data->ymin) / (data->img->height - 1);
+            int iterations = iterations_at_point(cx, cy, data->max);
+            int color = iteration_to_color(iterations, data->max);
+            setPixelCOLOR(data->img, x, y, color);
+        }
+    }
+
+    return NULL;
+}
+
+// Calculate Mandelbrot iterations for a given point
 int iterations_at_point(double x, double y, int max) {
     int count = 0;
     double zx = 0.0, zy = 0.0;
@@ -189,24 +207,29 @@ int iterations_at_point(double x, double y, int max) {
     return count;
 }
 
-// Map the iteration count to a color
+// Map iteration count to an RGB color
 int iteration_to_color(int i, int max) {
-    if (i == max) return 0x000000; // Black for points inside the Mandelbrot set
-    int r = (i * 9) % 256; // Red gradient
-    int g = (i * 15) % 256; // Green gradient
-    int b = (i * 25) % 256; // Blue gradient
-    return (r << 16) | (g << 8) | b; // Combine RGB
+    if (i == max) return 0x000000; // Black for points inside the set
+    int r = (i * 9) % 256;
+    int g = (i * 15) % 256;
+    int b = (i * 25) % 256;
+    return (r << 16) | (g << 8) | b;
 }
 
 // Display help message
 void show_help() {
     printf("Usage: mandel [options]\n");
     printf("Options:\n");
+    printf("  --movie       Generate a movie instead of a single image\n");
     printf("  -x <double>   X center (default=-0.5)\n");
     printf("  -y <double>   Y center (default=0.0)\n");
     printf("  -s <double>   Scale (default=4.0)\n");
     printf("  -W <int>      Image width (default=1000)\n");
     printf("  -H <int>      Image height (default=1000)\n");
     printf("  -m <int>      Max iterations (default=1000)\n");
-    printf("  --movie       Generate a movie instead of an image\n");
+    printf("  -o <string>   Output file name (required for single image mode)\n");
+    printf("  -f <int>      Number of frames for movie (default=50)\n");
+    printf("  -p <int>      Number of processes (default=1)\n");
+    printf("  -t <int>      Number of threads per process (default=1)\n");
+    printf("  -h            Show this help message\n");
 }
